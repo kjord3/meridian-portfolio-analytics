@@ -67,6 +67,8 @@
   #filelist .row{display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px solid var(--hair-soft); color:var(--text-dim);}
   #filelist .row.ok{color:var(--teal);}
   #gate-error{color:var(--rust); font-size:12px; margin-top:10px; min-height:16px;}
+  .spinner{width:26px; height:26px; border-radius:50%; border:2px solid var(--hair); border-top-color:var(--gold); margin:0 auto; animation:spin 0.8s linear infinite;}
+  @keyframes spin{ to{ transform:rotate(360deg); } }
 
   /* ---------- grid + cards ---------- */
   .kpis{display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:1rem;}
@@ -110,17 +112,25 @@
       </div>
     </div>
   </header>
-  <h2>Load your portfolio data</h2>
-  <p>Select the CSVs exported from the Colab pipeline (<code style="font-family:var(--font-mono);color:var(--gold);">data/processed/</code>).
-  All 9 files at once — nothing leaves your browser, there's no server involved.</p>
-  <label class="drop" id="drop">
-    <div class="icon">&#8593;</div>
-    <div class="main">Click to choose files, or drag them here</div>
-    <div class="sub">dim_dates · dim_holdings · fact_correlation · fact_macro · fact_portfolio_summary · fact_prices · fact_returns · fact_risk_metrics · portfolio_summary_metrics</div>
-    <input type="file" id="fileInput" multiple accept=".csv">
-  </label>
-  <div id="filelist"></div>
-  <div id="gate-error"></div>
+  <div id="gate-loading">
+    <div class="spinner"></div>
+    <p style="color:var(--text-dim); font-size:13px; margin-top:14px;">Loading live data from GitHub…</p>
+  </div>
+
+  <div id="gate-manual" style="display:none;">
+    <h2>Load your portfolio data</h2>
+    <p id="gate-manual-reason">Select the CSVs exported from the Colab pipeline. All 9 files at once — nothing leaves your browser, there's no server involved.</p>
+    <label class="drop" id="drop">
+      <div class="icon">&#8593;</div>
+      <div class="main">Click to choose files, or drag them here</div>
+      <div class="sub">dim_dates · dim_holdings · fact_correlation · fact_macro · fact_portfolio_summary · fact_prices · fact_returns · fact_risk_metrics · portfolio_summary_metrics</div>
+      <input type="file" id="fileInput" multiple accept=".csv">
+    </label>
+    <div id="filelist"></div>
+    <div id="gate-error"></div>
+    <p style="margin-top:14px;"><a href="#" id="retry-github" style="color:var(--gold); font-size:12px; text-decoration:none; border-bottom:1px dotted var(--gold-dim);">Try loading from GitHub again</a></p>
+  </div>
+
   <p style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); margin-top:2.5rem;">Built with <span style="color:var(--gold);">Claude</span></p>
 </div>
 
@@ -231,6 +241,10 @@
   var DATA = {};
   var CHARTS = {};
 
+  // ---- GitHub auto-load config ----
+  var REPO = { owner:"kjord3", name:"meridian-portfolio-analytics", branch:"main", folder:"meridian_processed_data" };
+  var RAW_BASE = "https://raw.githubusercontent.com/"+REPO.owner+"/"+REPO.name+"/"+REPO.branch+"/"+REPO.folder+"/";
+
   var COLORS = {teal:"#3F9C82", rust:"#C1553C", gold:"#C9A24B", dim:"#9BA3AB",
     grid:"rgba(255,255,255,0.06)", sectorSet:["#C9A24B","#3F9C82","#C1553C","#7D8FAE","#8A7238","#A85C7D","#5C8E9B"]};
 
@@ -240,7 +254,46 @@
   function fmtUsdShort(x){ if(x===undefined||x===null||isNaN(x)) return "—"; return "$"+(x/1e6).toFixed(2)+"M"; }
   function signed(el, val){ el.classList.remove("pos","neg"); if(val>0) el.classList.add("pos"); else if(val<0) el.classList.add("neg"); }
 
-  /* ---------------- file loading ---------------- */
+  /* ---------------- auto-load from GitHub, fallback to manual upload ---------------- */
+  var loadingEl = document.getElementById("gate-loading");
+  var manualEl = document.getElementById("gate-manual");
+  var reasonEl = document.getElementById("gate-manual-reason");
+  var retryEl = document.getElementById("retry-github");
+
+  function autoLoadFromGitHub(){
+    loadingEl.style.display = "block";
+    manualEl.style.display = "none";
+
+    var fetches = EXPECTED.map(function(key){
+      return fetch(RAW_BASE + key + ".csv", {cache:"no-store"}).then(function(res){
+        if(!res.ok) throw new Error(key + ".csv \u2014 HTTP " + res.status);
+        return res.text();
+      }).then(function(text){
+        var parsed = Papa.parse(text, {header:true, dynamicTyping:true, skipEmptyLines:true});
+        DATA[key] = parsed.data;
+      });
+    });
+
+    Promise.all(fetches).then(function(){
+      launchApp();
+    }).catch(function(err){
+      loadingEl.style.display = "none";
+      manualEl.style.display = "block";
+      reasonEl.textContent = "Couldn't auto-load from GitHub (" + err.message + "). You can select the CSVs manually below instead.";
+    });
+  }
+
+  retryEl.addEventListener("click", function(e){ e.preventDefault(); autoLoadFromGitHub(); });
+
+  function launchApp(){
+    document.getElementById("gate").style.display = "none";
+    document.getElementById("app").style.display = "block";
+    buildDashboard();
+  }
+
+  autoLoadFromGitHub();
+
+  /* ---------------- file loading (manual fallback) ---------------- */
   var dropEl = document.getElementById("drop");
   var inputEl = document.getElementById("fileInput");
   var listEl = document.getElementById("filelist");
@@ -296,9 +349,7 @@
       errEl.textContent = "Waiting on: " + missing.join(", ");
       return;
     }
-    document.getElementById("gate").style.display = "none";
-    document.getElementById("app").style.display = "block";
-    buildDashboard();
+    launchApp();
   }
 
   /* ---------------- tabs ---------------- */
